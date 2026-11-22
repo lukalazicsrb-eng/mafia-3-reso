@@ -1,0 +1,60 @@
+MAFIA III DEFINITIVE EDITION — MODERN TWEAKS ULTRA
+NATIVNI DIRECTX 11 RENDERER BRIDGE / RAZVOJNA VERZIJA
+======================================================
+
+SADRZAJ:
+    dinput8.dll
+    INSTALLATION.txt
+    ULTRA_STATUS.md
+
+Nema .cmd, .bat, .ps1, Luma ni ReShade fajlova.
+
+VAZNO: OVA VERZIJA JOS NIJE POTVRDENA POPRAVKA ULTRA REFLEKSIJA.
+Dosadasnji Ultra GPU filter je implementiran i prosao je WARP GPU test,
+ali ostaje iskljucen dok ne identifikujemo stvarni Mafia III SSR shader.
+Ovo izdanje popravlja veliki kvar zbog koga prethodni DLL nije dobijao
+nijedan stvarni Draw poziv: sada presrece poznatu originalnu Modern
+Tweaks 2.5.1 Draw forwarding adresu umesto nepouzdanog D3D11 vtable-a.
+
+RUCNA INSTALACIJA — KAO ORIGINALNI MODERN TWEAKS:
+1. Potpuno zatvori Mafia III i Steam igru.
+2. Idi u folder gde se nalazi mafia3definitiveedition.exe.
+3. Ako vec imas ModernTweaks_reflections_original.dll, OSTAVI GA.
+   On mora biti originalni Modern Tweaks 2.5.1.
+4. Ako imas samo originalni Modern Tweaks dinput8.dll, prvo napravi kopiju
+   i nazovi je ModernTweaks_reflections_original.dll. Ne prepisuj fajl
+   ako takav vec postoji!
+5. Sacuvaj kopiju trenutno aktivnog dinput8.dll kao
+   dinput8_pre_ultra_bridge_backup.dll (naziv je samo primer).
+6. Kopiraj novi dinput8.dll iz ovog ZIP-a u folder igre.
+7. Pokreni Mafia III preko STEAMA, ucitaj sejv i igraj preko 30 sekundi.
+8. Tek tada pogledaj MafiaReflections-loader.log i MafiaReflections.log.
+
+Ako ti je stari refleksijski diagnosticki DLL vec bio instaliran,
+korak 3 je vec obavljen. Tada SAMO zameni dinput8.dll,
+uz rezervnu kopiju prethodnog fajla.
+
+VRACANJE NA STARO:
+- Zatvori Mafia III.
+- Vrati svoj prethodni dinput8.dll iz rezervne kopije.
+- Ako si poceo samo sa originalnim Modern Tweaks-om, vrati originalni
+  fajl iz ModernTweaks_reflections_original.dll.
+- Nikada ne prepisuj nepoznat dinput8.dll ili druge .dll modove.
+- Originalni Modern Tweaks 2.5.1 nije ukljucen u ZIP.
+
+STA TRENUTNO ZNAMO:
+- Original Modern Tweaks SHA256:
+  529b16daec59e2ce5c735e5c8e7974662b647591da2847c53a16f165a479e900
+- Prethodni log: factory=1, taggedDevices=0, draws=0, presents=0.
+- Nova verzija proverava originalni Draw call RVA 0x79A71 i target
+  slot RVA 0x3A41B48; atomicki menja samo pokazivac funkcije u memoriji.
+- Uci i stvarne render target/SRV podatke i kada SHA shadera nije dostupan.
+- Ne menja ModernTweaks.dat. HIGH ostaje tvoj rezervni rezim.
+- Filter se aktivira samo uz potvrdjen jedinstveni shader SHA256 i
+  validiran SSR izlaz — toga jos nema u prilozenim logovima.
+
+AKO IGRA NECE DA SE POKRENE, VRATI PRETHODNI DLL.
+Nemoj rucno ukljucivati neproveren UltraSpatialFilter SHA u INI-ju.
+
+Za izvorni kod i stvarni status:
+https://github.com/lukalazicsrb-eng/mafia-3-reso

@@ -77,20 +77,42 @@ void report(const std::filesystem::path& folder, std::string_view message) {
     if (log) log << message << '\n';
 }
 
+struct ModernDrawWorker {
+    std::filesystem::path folder;
+    HMODULE originalMod=nullptr;
+};
+
 DWORD WINAPI delayedRendererHealth(LPVOID parameter) {
-    std::unique_ptr<std::filesystem::path> folder(static_cast<std::filesystem::path*>(parameter));
+    std::unique_ptr<ModernDrawWorker> worker(static_cast<ModernDrawWorker*>(parameter));
+    // Original Modern Tweaks initializes its D3D11 Draw forwarding slot
+    // after this dinput8 proxy is loaded. Retry safely on a separate thread;
+    // never block the game or DirectInput8Create during startup.
+    bool bridged=false;
+    for(unsigned attempt=0;attempt<120;++attempt) {
+        if(mafiareflections::native::installVerifiedModernTweaksDrawBridge(worker->originalMod)) {
+            bridged=true;
+            break;
+        }
+        Sleep(250);
+    }
+    report(worker->folder,bridged
+        ? "Verified original Modern Tweaks Draw slot connected atomically."
+        : "Modern Tweaks Draw slot not ready/validated; original rendering unchanged.");
     Sleep(12000);
-    const auto status = mafiareflections::native::hookHealth();
+    const auto status=mafiareflections::native::hookHealth();
     std::ostringstream message;
-    message << "Hook health (12 seconds): factories=" << status.deviceFactoriesCalled
+    message << "Renderer hook health: factories=" << status.deviceFactoriesCalled
         << " taggedDevices=" << status.gameDevicesTagged
         << " taggedShaders=" << status.shadersTagged
         << " draws=" << status.gameDrawsObserved
+        << " modernTweaksDraws=" << status.modernTweaksDrawCalls
+        << " modernTweaksSlotInstalled=" << (status.modernTweaksSlotInstalled?1:0)
         << " dispatches=" << status.gameDispatchesObserved
         << " presents=" << status.gamePresentsObserved;
-    report(*folder, message.str());
-    if (!status.gameDevicesTagged || !status.gameDrawsObserved)
-        report(*folder, "WARNING: DX11 factory import was patched, but real game draw capture is NOT confirmed.");
+    report(worker->folder,message.str());
+    if(!status.gameDrawsObserved && !status.modernTweaksDrawCalls)
+        report(worker->folder,
+            "WARNING: no real renderer callbacks reached our observer; Ultra filter remains disabled.");
     return 0;
 }
 
@@ -103,6 +125,14 @@ void loadForGame(const std::filesystem::path& folder) {
         return;
     }
 
+    // Load the verified original first, then install our optional observer.
+    // Its native Draw forward pointer does not exist until the game initializes.
+    const HMODULE original=loadLocal(originalPath);
+    if(!original) {
+        report(folder,"Original Modern Tweaks DLL could not be loaded.");
+        return;
+    }
+
     // Renderer and F8 callbacks can outlive calls to DirectInput8Create.
     HMODULE pinned = nullptr;
     const bool pinVerified = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
@@ -111,7 +141,7 @@ void loadForGame(const std::filesystem::path& folder) {
     report(folder, observerInstalled ? "Reflection observer installed (import attached; waiting for real renderer callbacks)."
         : "Reflection observer could not attach to this renderer.");
     if (observerInstalled) {
-        auto* copy = new (std::nothrow) std::filesystem::path(folder);
+        auto* copy = new (std::nothrow) ModernDrawWorker{folder,original};
         if (copy) {
             auto handle = CreateThread(nullptr, 0, delayedRendererHealth, copy, 0, nullptr);
             if (handle) CloseHandle(handle);
@@ -119,9 +149,7 @@ void loadForGame(const std::filesystem::path& folder) {
         }
     }
 
-    const auto original = loadLocal(originalPath);
-    if (original)
-        originalFactory = reinterpret_cast<InputFactory>(GetProcAddress(original, "DirectInput8Create"));
+    originalFactory = reinterpret_cast<InputFactory>(GetProcAddress(original, "DirectInput8Create"));
     report(folder, originalFactory ? "Forwarding to verified Modern Tweaks 2.5.1."
                                   : "Modern Tweaks input export unavailable.");
     if (originalFactory && pinVerified) {
