@@ -29,6 +29,9 @@ if((Get-FileHash -LiteralPath $active -Algorithm SHA256).Hash.ToLowerInvariant()
   throw 'Previous DLL could not be restored correctly; backup preserved.'
 }
 Remove-Item -LiteralPath $manifest -Force
-# Preserve backup even after successful restoration for extra safety.
+# Archive the verified previous DLL instead of leaving a stale working
+# backup that would block a future install or risk accidental overwrite.
+$archive=$backup+'.restored_'+[Guid]::NewGuid().ToString('N')
+Move-Item -LiteralPath $backup -Destination $archive -ErrorAction Stop
 Write-Host 'Previous dinput8.dll restored. Reflection settings untouched.' -ForegroundColor Green
-Write-Host "Old backup retained at $backup"
+Write-Host "Verified previous DLL archived at $archive"
