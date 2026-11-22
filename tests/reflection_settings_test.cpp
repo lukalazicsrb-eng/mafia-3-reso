@@ -36,6 +36,15 @@ bool installVerifiedHooks(const Observers& observers) noexcept {
     return callbacks.beforeDraw && callbacks.beforeDispatch && callbacks.afterPresent && callbacks.beforeResize;
 }
 bool getShaderIdentity(ID3D11DeviceChild*, ShaderIdentity&) noexcept { return false; }
+HookHealth hookHealth() noexcept {
+    HookHealth health{};
+    health.deviceFactoriesCalled = 1;
+    health.gameDevicesTagged = 1;
+    health.shadersTagged = 12;
+    health.gameDrawsObserved = 8;
+    health.gamePresentsObserved = 1;
+    return health;
+}
 } // namespace mafiareflections::native
 
 int main() {
@@ -64,6 +73,12 @@ int main() {
     callbacks.beforeResize(nullptr);
     if (readFile(log).find("ResizeBuffers attempted") == std::string::npos)
         return fail("The observer did not log after F8 enabled recording.");
+    callbacks.afterPresent(nullptr, 0, 0, S_OK);
+    const auto withHealth = readFile(log);
+    if (withHealth.find("HOOK_HEALTH frame=1") == std::string::npos
+        || withHealth.find("taggedShaders=12") == std::string::npos
+        || withHealth.find("reflectionMatches=0") == std::string::npos)
+        return fail("Hook health was not recorded or incorrectly claimed reflection matches.");
     if (!setReflectionDiagnosticsEnabled(false) || reflectionDiagnosticsEnabled()
         || GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 1, settings.c_str()) != 0)
         return fail("The F8 Off choice was not applied and saved.");
