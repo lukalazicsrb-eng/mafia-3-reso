@@ -285,10 +285,13 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
             // IAT observer was installed. Capture a bounded *unverified*
             // render-pass sample rather than falsely claiming no shaders
             // executed. Never allow this to unlock the Ultra GPU filter.
-            if (shader && (checked == 0 || (checked % 2048 == 0 && checked <= 49152))
-                && untaggedSamplesLogged.load(std::memory_order_relaxed) < 24) {
+            const bool earlySample=checked < 2048 && checked % 128 == 0;
+            const bool laterSample=checked > 0 && checked <= 131072
+                && checked % 4096 == 0;
+            if (shader && (earlySample || laterSample)
+                && untaggedSamplesLogged.load(std::memory_order_relaxed) < 48) {
                 std::lock_guard<std::mutex> guard(state);
-                if (untaggedSamplesLogged.load(std::memory_order_relaxed) < 24) {
+                if (untaggedSamplesLogged.load(std::memory_order_relaxed) < 48) {
                     ++untaggedSamplesLogged;
                     Views<ID3D11ShaderResourceView, srvLimit> inputs;
                     Views<ID3D11RenderTargetView, rtvLimit> outputs;
