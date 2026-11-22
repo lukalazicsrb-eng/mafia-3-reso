@@ -24,6 +24,9 @@ target_link_libraries(mafia_reflections_proxy PRIVATE bcrypt d3d11 dxgi)
 add_library(ultra_spatial_filter STATIC src/ultra_spatial_filter.cpp)
 target_include_directories(ultra_spatial_filter PUBLIC src)
 target_link_libraries(ultra_spatial_filter PUBLIC d3d11 d3dcompiler dxgi)
+# Built into the same native dinput8.dll loader (no ReShade).
+target_link_libraries(mafia_reflections_proxy PRIVATE ultra_spatial_filter)
+
 
 add_library(reflection_msaa STATIC src/msaa_reflection.cpp)
 target_include_directories(reflection_msaa PUBLIC src)
@@ -41,5 +44,7 @@ if(BUILD_TESTING)
 
     add_executable(reflection_settings_test tests/reflection_settings_test.cpp src/reflection_observer.cpp)
     target_include_directories(reflection_settings_test PRIVATE src)
+    target_link_libraries(reflection_settings_test PRIVATE ultra_spatial_filter)
+
     add_test(NAME reflection_settings COMMAND reflection_settings_test)
 endif()
