@@ -215,14 +215,25 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
     }
 }
 
+void afterDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
+    if (!observing && observers.afterDraw && gameObject(context)) {
+        ObserverScope active;
+        observers.afterDraw(context, call);
+    }
+}
+
 void STDMETHODCALLTYPE onDraw(ID3D11DeviceContext* context, UINT count, UINT first) {
-    observeDraw(context, {DrawKind::Draw, count, first, 0});
+    const DrawCall call{DrawKind::Draw, count, first, 0};
+    observeDraw(context, call);
     draw.original.load(std::memory_order_acquire)(context, count, first);
+    afterDraw(context, call);
 }
 
 void STDMETHODCALLTYPE onDrawIndexed(ID3D11DeviceContext* context, UINT count, UINT first, INT baseVertex) {
-    observeDraw(context, {DrawKind::DrawIndexed, count, first, baseVertex});
+    const DrawCall call{DrawKind::DrawIndexed, count, first, baseVertex};
+    observeDraw(context, call);
     drawIndexed.original.load(std::memory_order_acquire)(context, count, first, baseVertex);
+    afterDraw(context, call);
 }
 
 void STDMETHODCALLTYPE onDispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z) {
