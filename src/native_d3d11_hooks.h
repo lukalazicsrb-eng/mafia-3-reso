@@ -29,10 +29,25 @@ struct DispatchCall {
 
 struct Observers {
     void (*beforeDraw)(ID3D11DeviceContext*, const DrawCall&) noexcept = nullptr;
+    // Optional post-pass callback. Recursion guard remains active while it runs.
+    void (*afterDraw)(ID3D11DeviceContext*, const DrawCall&) noexcept = nullptr;
     void (*beforeDispatch)(ID3D11DeviceContext*, const DispatchCall&) noexcept = nullptr;
     void (*afterPresent)(IDXGISwapChain*, UINT syncInterval, UINT flags, HRESULT) noexcept = nullptr;
     void (*beforeResize)(IDXGISwapChain*) noexcept = nullptr;
 };
+
+// Non-invasive counters. An executable IAT patch does not prove that a
+// rendering device or a draw callback was actually observed.
+struct HookHealth {
+    std::uint64_t deviceFactoriesCalled = 0;
+    std::uint64_t gameDevicesTagged = 0;
+    std::uint64_t shadersTagged = 0;
+    std::uint64_t gameDrawsObserved = 0;
+    std::uint64_t gameDispatchesObserved = 0;
+    std::uint64_t gamePresentsObserved = 0;
+};
+
+HookHealth hookHealth() noexcept;
 
 // Call during opt-in loader initialization, outside DllMain and before the
 // game's D3D11 device exists. Returns true when an exact factory import is

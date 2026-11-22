@@ -58,6 +58,13 @@ HMODULE systemDxgi = nullptr;
 Observers observers{};
 std::atomic<bool> initialized{false};
 std::atomic<bool> attempted{false};
+// Real callback counters (unlike the IAT installation result).
+std::atomic<std::uint64_t> factoryCalls{0};
+std::atomic<std::uint64_t> taggedDevices{0};
+std::atomic<std::uint64_t> taggedShaders{0};
+std::atomic<std::uint64_t> gameDraws{0};
+std::atomic<std::uint64_t> gameDispatches{0};
+std::atomic<std::uint64_t> gamePresents{0};
 std::mutex installation;
 thread_local bool observing = false;
 
@@ -179,7 +186,8 @@ void markShader(ID3D11Device* device, ID3D11DeviceChild* shader,
     if (hash.start(shaAlgorithm) && hash.append(bytecode, static_cast<ULONG>(size))
         && hash.finish(identity.sha256)) {
         identity.crc32 = crc32(bytecode, size);
-        shader->SetPrivateData(shaderIdentityKey, sizeof(identity), &identity);
+        if (SUCCEEDED(shader->SetPrivateData(shaderIdentityKey, sizeof(identity), &identity)))
+            taggedShaders.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -202,23 +210,36 @@ HRESULT STDMETHODCALLTYPE onCreateComputeShader(ID3D11Device* device, const void
 void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
     if (!observing && observers.beforeDraw && gameObject(context)) {
         ObserverScope active;
+        gameDraws.fetch_add(1, std::memory_order_relaxed);
         observers.beforeDraw(context, call);
     }
 }
 
+void afterDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
+    if (!observing && observers.afterDraw && gameObject(context)) {
+        ObserverScope active;
+        observers.afterDraw(context, call);
+    }
+}
+
 void STDMETHODCALLTYPE onDraw(ID3D11DeviceContext* context, UINT count, UINT first) {
-    observeDraw(context, {DrawKind::Draw, count, first, 0});
+    const DrawCall call{DrawKind::Draw, count, first, 0};
+    observeDraw(context, call);
     draw.original.load(std::memory_order_acquire)(context, count, first);
+    afterDraw(context, call);
 }
 
 void STDMETHODCALLTYPE onDrawIndexed(ID3D11DeviceContext* context, UINT count, UINT first, INT baseVertex) {
-    observeDraw(context, {DrawKind::DrawIndexed, count, first, baseVertex});
+    const DrawCall call{DrawKind::DrawIndexed, count, first, baseVertex};
+    observeDraw(context, call);
     drawIndexed.original.load(std::memory_order_acquire)(context, count, first, baseVertex);
+    afterDraw(context, call);
 }
 
 void STDMETHODCALLTYPE onDispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z) {
     if (!observing && observers.beforeDispatch && gameObject(context)) {
         ObserverScope active;
+        gameDispatches.fetch_add(1, std::memory_order_relaxed);
         observers.beforeDispatch(context, {x, y, z});
     }
     dispatch.original.load(std::memory_order_acquire)(context, x, y, z);
@@ -228,6 +249,7 @@ HRESULT STDMETHODCALLTYPE onPresent(IDXGISwapChain* chain, UINT syncInterval, UI
     const HRESULT hr = present.original.load(std::memory_order_acquire)(chain, syncInterval, flags);
     if (!observing && observers.afterPresent && gameObject(chain)) {
         ObserverScope active;
+        gamePresents.fetch_add(1, std::memory_order_relaxed);
         observers.afterPresent(chain, syncInterval, flags, hr);
     }
     return hr;
@@ -276,11 +298,14 @@ void attachDevice(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     else device->GetImmediateContext(&context);
     if (context && context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) {
         std::lock_guard<std::mutex> guard(installation);
-        if (pixelShader.attach(device, createPixelShaderIndex, &onCreatePixelShader, systemD3d11)
-            && draw.attach(context, drawIndex, &onDraw, systemD3d11)
-            && drawIndexed.attach(context, drawIndexedIndex, &onDrawIndexed, systemD3d11)
-            && tagGameObject(device)) {
-            tagGameObject(context);
+        // A third-party mod can hook CreatePixelShader before we attach.
+        // That must not silently disable ALL draw diagnostics. Establish
+        // draw callbacks independently and report missing shader identities.
+        pixelShader.attach(device, createPixelShaderIndex, &onCreatePixelShader, systemD3d11);
+        const bool drawAttached = draw.attach(context, drawIndex, &onDraw, systemD3d11);
+        const bool indexedAttached = drawIndexed.attach(context, drawIndexedIndex, &onDrawIndexed, systemD3d11);
+        if (drawAttached && indexedAttached && tagGameObject(device) && tagGameObject(context)) {
+            taggedDevices.fetch_add(1, std::memory_order_relaxed);
             computeShader.attach(device, createComputeShaderIndex, &onCreateComputeShader, systemD3d11);
             dispatch.attach(context, dispatchIndex, &onDispatch, systemD3d11);
             if (factory) createSwapChain.attach(factory, createSwapChainIndex, &onCreateSwapChain, systemDxgi);
@@ -304,6 +329,7 @@ void attachResults(ID3D11Device** device, ID3D11DeviceContext** context, IDXGISw
 HRESULT WINAPI onCreateDevice(IDXGIAdapter* adapter, D3D_DRIVER_TYPE kind, HMODULE software, UINT flags,
     const D3D_FEATURE_LEVEL* levels, UINT numLevels, UINT sdkVersion, ID3D11Device** device,
     D3D_FEATURE_LEVEL* chosenLevel, ID3D11DeviceContext** context) {
+    factoryCalls.fetch_add(1, std::memory_order_relaxed);
     const auto forward = deviceFactory.original.load(std::memory_order_acquire);
     const HRESULT hr = forward(adapter, kind, software, flags, levels, numLevels, sdkVersion,
         device, chosenLevel, context);
@@ -316,6 +342,7 @@ HRESULT WINAPI onCreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE
     UINT flags, const D3D_FEATURE_LEVEL* levels, UINT numLevels, UINT sdkVersion,
     const DXGI_SWAP_CHAIN_DESC* description, IDXGISwapChain** chain, ID3D11Device** device,
     D3D_FEATURE_LEVEL* chosenLevel, ID3D11DeviceContext** context) {
+    factoryCalls.fetch_add(1, std::memory_order_relaxed);
     const auto forward = deviceAndSwapChainFactory.original.load(std::memory_order_acquire);
     const HRESULT hr = forward(adapter, kind, software, flags, levels, numLevels, sdkVersion,
         description, chain, device, chosenLevel, context);
@@ -418,6 +445,17 @@ bool installVerifiedHooks(const Observers& callbacks) noexcept {
     initialized.store(false, std::memory_order_release);
     if (shaAlgorithm) BCryptCloseAlgorithmProvider(shaAlgorithm, 0);
     return false;
+}
+
+HookHealth hookHealth() noexcept {
+    return {
+        factoryCalls.load(std::memory_order_relaxed),
+        taggedDevices.load(std::memory_order_relaxed),
+        taggedShaders.load(std::memory_order_relaxed),
+        gameDraws.load(std::memory_order_relaxed),
+        gameDispatches.load(std::memory_order_relaxed),
+        gamePresents.load(std::memory_order_relaxed)
+    };
 }
 
 bool getShaderIdentity(ID3D11DeviceChild* shader, ShaderIdentity& identity) noexcept {

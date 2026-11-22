@@ -1,4 +1,5 @@
 #include "reflection_menu.h"
+#include "native_d3d11_hooks.h"
 #include "reflection_observer.h"
 
 #include <windows.h>
@@ -8,6 +9,9 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <new>
+#include <sstream>
 #include <string_view>
 
 namespace {
@@ -73,6 +77,23 @@ void report(const std::filesystem::path& folder, std::string_view message) {
     if (log) log << message << '\n';
 }
 
+DWORD WINAPI delayedRendererHealth(LPVOID parameter) {
+    std::unique_ptr<std::filesystem::path> folder(static_cast<std::filesystem::path*>(parameter));
+    Sleep(12000);
+    const auto status = mafiareflections::native::hookHealth();
+    std::ostringstream message;
+    message << "Hook health (12 seconds): factories=" << status.deviceFactoriesCalled
+        << " taggedDevices=" << status.gameDevicesTagged
+        << " taggedShaders=" << status.shadersTagged
+        << " draws=" << status.gameDrawsObserved
+        << " dispatches=" << status.gameDispatchesObserved
+        << " presents=" << status.gamePresentsObserved;
+    report(*folder, message.str());
+    if (!status.gameDevicesTagged || !status.gameDrawsObserved)
+        report(*folder, "WARNING: DX11 factory import was patched, but real game draw capture is NOT confirmed.");
+    return 0;
+}
+
 void loadForGame(const std::filesystem::path& folder) {
     const auto originalPath = folder / originalName;
     const FileHandle lockedOriginal{CreateFileW(originalPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
@@ -87,8 +108,16 @@ void loadForGame(const std::filesystem::path& folder) {
     const bool pinVerified = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
         | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(proxyModule), &pinned) != FALSE;
     const bool observerInstalled = pinVerified && mafiareflections::installReflectionObserver(folder.c_str());
-    report(folder, observerInstalled ? "Reflection observer installed."
+    report(folder, observerInstalled ? "Reflection observer installed (import attached; waiting for real renderer callbacks)."
         : "Reflection observer could not attach to this renderer.");
+    if (observerInstalled) {
+        auto* copy = new (std::nothrow) std::filesystem::path(folder);
+        if (copy) {
+            auto handle = CreateThread(nullptr, 0, delayedRendererHealth, copy, 0, nullptr);
+            if (handle) CloseHandle(handle);
+            else delete copy;
+        }
+    }
 
     const auto original = loadLocal(originalPath);
     if (original)

@@ -1,5 +1,6 @@
 #include "native_d3d11_hooks.h"
 #include "reflection_observer.h"
+#include "ultra_spatial_filter.h"
 
 #include <wrl/client.h>
 
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <mutex>
+#include <set>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -26,6 +28,8 @@ constexpr unsigned perPassLimit = 6;
 constexpr unsigned relatedEventLimit = 12;
 constexpr unsigned dependencyCheckLimit = 128;
 constexpr unsigned drawCheckLimit = 1000000;
+constexpr unsigned unmatchedLimit = 32;
+constexpr unsigned unmatchedSamplingPeriod = 256;
 
 struct Pass {
     std::uint32_t crc;
@@ -43,6 +47,12 @@ std::array<Pass, 4> candidates{{
 std::mutex state;
 std::filesystem::path logPath;
 std::filesystem::path settingsPath;
+std::filesystem::path modernSettingsPath;
+mafiareflections::UltraSpatialFilter spatialFilter;
+std::array<std::uint8_t, 32> expectedUltraShader{};
+std::atomic<bool> spatialFilterArmed{false};
+std::atomic<unsigned> spatialFilterWrites{0};
+std::atomic<unsigned> spatialFilterRefusals{0};
 std::atomic<bool> observerStarted{false};
 std::atomic<bool> observerAvailable{false};
 std::atomic<bool> diagnosticsEnabled{true};
@@ -53,6 +63,9 @@ std::uint64_t nextResourceId = 0;
 std::uint64_t previousCaptureLastResourceId = 0;
 unsigned relatedEvents = 0;
 unsigned resizeEvents = 0;
+std::set<std::array<std::uint8_t, 32>> unmatchedShaders;
+std::atomic<std::uint64_t> untaggedShaderDraws{0};
+std::atomic<unsigned> reflectionPassMatches{0};
 bool dependencyScanStarted = false;
 
 template<typename View, std::size_t Count>
@@ -258,20 +271,33 @@ void startDependencyChecks() noexcept {
 }
 
 void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
-    if (!diagnosticsEnabled.load(std::memory_order_relaxed)
-        || drawChecks.load(std::memory_order_relaxed) >= drawCheckLimit
-        || drawChecks.fetch_add(1, std::memory_order_relaxed) >= drawCheckLimit) return;
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed)) return;
+    const unsigned checked = drawChecks.fetch_add(1, std::memory_order_relaxed);
+    if (checked >= drawCheckLimit) return;
     try {
         ComPtr<ID3D11PixelShader> shader;
         context->PSGetShader(&shader, nullptr, nullptr);
         ShaderIdentity identity{};
-        if (!getShaderIdentity(shader.Get(), identity)) return;
+        if (!getShaderIdentity(shader.Get(), identity)) {
+            untaggedShaderDraws.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
         auto* pass = candidate(identity.crc32);
-        if (!pass && (!possibleGraphicsDependency(identity.crc32) || !takeDependencyCheck())) return;
+        const bool dependency = !pass && possibleGraphicsDependency(identity.crc32);
+        // Candidate IDs are discovery hints from another project, not guaranteed
+        // to equal the standard bytecode CRC32 computed by this hook.
+        // Capture a small, reproducible sample of unmatched shaders so an
+        // incorrect CRC algorithm does not silently yield an empty log.
+        const bool sampleUnmatched = !pass && !dependency && checked >= 2048
+            && (checked % unmatchedSamplingPeriod == 0);
+        if (!pass && !sampleUnmatched && (!dependency || !takeDependencyCheck())) return;
 
         std::lock_guard<std::mutex> guard(state);
         if (!diagnosticsEnabled.load(std::memory_order_relaxed)) return;
-        if (pass ? pass->logged >= perPassLimit : relatedEvents >= relatedEventLimit) return;
+        if (pass ? pass->logged >= perPassLimit
+                 : dependency ? relatedEvents >= relatedEventLimit
+                              : (!sampleUnmatched || unmatchedShaders.size() >= unmatchedLimit
+                                  || !unmatchedShaders.insert(identity.sha256).second)) return;
         Views<ID3D11ShaderResourceView, srvLimit> inputs;
         Views<ID3D11RenderTargetView, rtvLimit> outputs;
         Views<ID3D11UnorderedAccessView, uavLimit> uavs;
@@ -279,17 +305,21 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
         context->PSGetShaderResources(0, srvLimit, inputs.values.data());
         context->OMGetRenderTargets(rtvLimit, outputs.values.data(), &depth);
         context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, uavLimit, uavs.values.data());
-        if (!pass && !touchesCandidate(inputs) && !touchesCandidate(outputs) && !touchesCandidate(uavs)) return;
+        if (dependency && !touchesCandidate(inputs)
+            && !touchesCandidate(outputs) && !touchesCandidate(uavs)) return;
 
         std::ofstream log(logPath, std::ios::app);
         if (!log) return;
         if (pass) {
             ++pass->logged;
+            reflectionPassMatches.fetch_add(1, std::memory_order_relaxed);
             startDependencyChecks();
-        } else {
+        } else if (dependency) {
             ++relatedEvents;
         }
-        writeIdentity(log, identity, pass ? pass->name : "Graphics pass sharing reflection resources");
+        writeIdentity(log, identity, pass ? pass->name
+            : dependency ? "Graphics pass sharing reflection resources"
+                         : "Unmatched shader sample (NOT confirmed reflection)");
         log << " PS " << (call.kind == DrawKind::Draw ? "Draw" : "DrawIndexed")
             << " count=" << call.count << " first=" << call.first << " baseVertex=" << call.baseVertex;
         UINT viewportCount = 1;
@@ -335,9 +365,97 @@ void observeDispatch(ID3D11DeviceContext* context, const DispatchCall& call) noe
     }
 }
 
+int hexNibble(wchar_t c) noexcept {
+    if (c >= L'0' && c <= L'9') return c - L'0';
+    if (c >= L'a' && c <= L'f') return c - L'a' + 10;
+    if (c >= L'A' && c <= L'F') return c - L'A' + 10;
+    return -1;
+}
+bool parseVerifiedShaderHash(const wchar_t* text, std::array<std::uint8_t, 32>& output) noexcept {
+    if (!text || std::wcslen(text) != 64) return false;
+    std::array<std::uint8_t, 32> hash{};
+    for (std::size_t i = 0; i < hash.size(); ++i) {
+        const int hi = hexNibble(text[2*i]);
+        const int lo = hexNibble(text[2*i+1]);
+        if (hi < 0 || lo < 0) return false;
+        hash[i] = static_cast<std::uint8_t>((hi<<4)|lo);
+    }
+    output = hash;
+    return true;
+}
+
+void observeAfterDraw(ID3D11DeviceContext* ctx, const DrawCall& call) noexcept {
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed) ||
+        !spatialFilterArmed.load(std::memory_order_acquire) ||
+        !ctx || call.kind != DrawKind::Draw || call.count > 6) return;
+    try {
+        // The original F8 Ultra choice must be ACTIVE. High is intentionally
+        // not modified; the user's fall-back remains unchanged.
+        if (GetPrivateProfileIntW(L"Visuals", L"Reflections", -1,
+                                  modernSettingsPath.c_str()) != 2) return;
+        ComPtr<ID3D11PixelShader> ps;
+        ctx->PSGetShader(&ps, nullptr, nullptr);
+        ShaderIdentity identity{};
+        if (!getShaderIdentity(ps.Get(), identity) ||
+            identity.sha256 != expectedUltraShader) return;
+
+        // Matching one shader hash is not enough to replace an entire
+        // composited frame. Only isolate an unambiguous single-RTV,
+        // single-sampled 2D pass with no DSV or additional RTV attachments.
+        ID3D11RenderTargetView* output[2]{};
+        ComPtr<ID3D11DepthStencilView> depth;
+        ctx->OMGetRenderTargets(2, output, &depth);
+        ComPtr<ID3D11RenderTargetView> first;
+        ComPtr<ID3D11RenderTargetView> second;
+        first.Attach(output[0]);
+        second.Attach(output[1]);
+        if (!first || second || depth) {
+            spatialFilterRefusals.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        if (!spatialFilter.apply(ctx, first.Get())) {
+            spatialFilterRefusals.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        const auto n=++spatialFilterWrites;
+        if (n <= 4) {
+            std::lock_guard<std::mutex> guard(state);
+            std::ofstream log(logPath, std::ios::app);
+            if (log) log << "UNVERIFIED ULTRA SPATIAL FILTER DRAW " << n
+                << " shader SHA-256 validated against explicitly configured hash.\n"
+                << "Target output processing occurred, but image quality "
+                   "and SSR identity still require gameplay verification.\n";
+        }
+    } catch (...) {
+        // Never let an optional graphics override crash the game.
+    }
+}
+
 void observePresent(IDXGISwapChain*, UINT, UINT flags, HRESULT result) noexcept {
-    if (result == S_OK && !(flags & DXGI_PRESENT_TEST))
-        presentedFrames.fetch_add(1, std::memory_order_relaxed);
+    if (result != S_OK || (flags & DXGI_PRESENT_TEST)) return;
+    const auto frame = presentedFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed)
+        || (frame != 1 && frame != 60 && frame != 180)) return;
+    try {
+        const auto health = mafiareflections::native::hookHealth();
+        std::lock_guard<std::mutex> guard(state);
+        std::ofstream log(logPath, std::ios::app);
+        if (log)
+            log << "HOOK_HEALTH frame=" << frame
+                << " factories=" << health.deviceFactoriesCalled
+                << " gameDevices=" << health.gameDevicesTagged
+                << " taggedShaders=" << health.shadersTagged
+                << " callbacksDraw=" << health.gameDrawsObserved
+                << " callbacksDispatch=" << health.gameDispatchesObserved
+                << " callbacksPresent=" << health.gamePresentsObserved
+                << " shaderIdentityMisses=" << untaggedShaderDraws.load()
+                << " reflectionMatches=" << reflectionPassMatches.load()
+                << " unmatchedSamples=" << unmatchedShaders.size()
+                << " ultraFilterWrites=" << spatialFilterWrites.load()
+                << " ultraFilterRefusals=" << spatialFilterRefusals.load() << '\n';
+    } catch (...) {
+        // Logging is strictly optional and cannot affect the game.
+    }
 }
 
 void observeResize(IDXGISwapChain*) noexcept {
@@ -362,20 +480,36 @@ bool mafiareflections::installReflectionObserver(const wchar_t* gameFolder) noex
         if (!folder.is_absolute() || observerStarted.exchange(true, std::memory_order_acq_rel)) return false;
         logPath = folder / L"MafiaReflections.log";
         settingsPath = folder / L"MafiaReflections.ini";
+        modernSettingsPath = folder / L"ModernTweaks.dat";
+        wchar_t sha[96]{};
+        GetPrivateProfileStringW(L"UltraSpatialFilter", L"VerifiedShaderSHA256",
+                                 L"", sha, static_cast<DWORD>(std::size(sha)),
+                                 settingsPath.c_str());
+        const bool validHash = parseVerifiedShaderHash(sha, expectedUltraShader);
+        const bool requested = GetPrivateProfileIntW(
+            L"UltraSpatialFilter", L"Enable", 0, settingsPath.c_str()) == 1;
+        spatialFilterArmed.store(validHash && requested, std::memory_order_release);
         diagnosticsEnabled.store(GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 1,
             settingsPath.c_str()) == 1, std::memory_order_relaxed);
         {
             std::ofstream log(logPath, std::ios::trunc);
             if (!log) return false;
             log << "Mafia III reflections resource observation\n"
+                << (spatialFilterArmed.load() ?
+                    "EXPERIMENTAL native spatial Ultra filter ARMED for verified shader hash.\n" :
+                    "Native spatial Ultra filter OFF (requires opt-in + confirmed shader SHA-256).\n")
                 << "Candidate CRCs guide inspection; full DXBC SHA-256 and runtime bindings are logged.\n"
                 << "Renderer settings, resources, draws and dispatches are preserved.\n"
                 << "Each candidate logs up to six events, with twelve related events total.\n"
                 << "Each event inspects at most sixteen SRVs and eight UAVs. Draw inspection ends after "
-                << drawCheckLimit << " calls.\n";
+                << drawCheckLimit << " calls.\n"
+                << "Unknown shader discovery: at most " << unmatchedLimit
+                << " unique SHA-256 signatures; these are NOT validated SSR passes.\n"
+                << "HOOK_HEALTH distinguishes a patched IAT from real rendering callbacks.\n";
         }
         mafiareflections::native::Observers hooks{};
         hooks.beforeDraw = &observeDraw;
+        hooks.afterDraw = &observeAfterDraw;
         hooks.beforeDispatch = &observeDispatch;
         hooks.afterPresent = &observePresent;
         hooks.beforeResize = &observeResize;
@@ -414,6 +548,9 @@ bool mafiareflections::setReflectionDiagnosticsEnabled(bool enabled) noexcept {
         }
         if (enabled) {
             for (auto& pass : candidates) pass.logged = 0;
+            unmatchedShaders.clear();
+            untaggedShaderDraws.store(0, std::memory_order_relaxed);
+            reflectionPassMatches.store(0, std::memory_order_relaxed);
             previousCaptureLastResourceId = nextResourceId;
             relatedEvents = 0;
             resizeEvents = 0;

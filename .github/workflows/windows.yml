@@ -18,6 +18,49 @@ jobs:
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build --build-config Release --output-on-failure --verbose
       - run: python -B -m unittest discover -s tests -p 'test_*.py'
+      - name: Verify diagnostic installer PowerShell scripts parse
+        shell: pwsh
+        run: |
+          foreach ($name in @('Install-UltraCaptureAudit.ps1','Restore-UltraCaptureAudit.ps1')) {
+            $file = (Resolve-Path (Join-Path install $name)).Path
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors)
+            if ($errors.Count -gt 0) { throw "PowerShell syntax error: $name - $($errors -join '; ')" }
+          }
+      - name: Package safe standalone reflection capture patch
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item build/Release/dinput8.dll package/dinput8.dll
+          Copy-Item install/Install-UltraCaptureAudit.ps1 package/
+          Copy-Item install/Restore-UltraCaptureAudit.ps1 package/
+          Copy-Item 'install/Instaliraj refleksije - DIJAGNOSTIKA.cmd' package/
+          Copy-Item 'install/Vrati prethodni DLL - DIJAGNOSTIKA.cmd' package/
+          Copy-Item docs/ultra-filter-prototype.md package/ULTRA_FILTER_STATUS.md
+          Copy-Item docs/ultra-investigation.md package/ULTRA_INVESTIGATION.md
+          Copy-Item install/MafiaReflections.ini package/UltraFilter_DISABLED_Example.ini
+          Copy-Item README.md package/PROJECT_README.md
+          @'
+          NATIVE ULTRA SPATIAL FILTER — GPU TEST USPEO, U IGRI NIJE POTVRDJEN.
+          Novi D3D11 filter zaista obradjuje test-teksturu, ali se u Mafia III
+          NE AKTIVIRA dok nemamo potvrdjen SHA-256 stvarnog SSR shadera.
+          Originalni High/Ultra meni i ModernTweaks.dat ostaju netaknuti.
+          Nema ReShade/Luma. Ne menja rezoluciju SSR tekstura ni MSAA u igri.
+          Procitaj ULTRA_FILTER_STATUS.md.
+          Raspakuj ZIP van igre i pokreni:
+          Instaliraj refleksije - DIJAGNOSTIKA.cmd
+          Ako igra ne radi, zatvori je i pokreni:
+          Vrati prethodni DLL - DIJAGNOSTIKA.cmd
+          Originalni Modern Tweaks DLL nije u ovom paketu.
+          '@ | Set-Content -LiteralPath package/PROCITAJ_PRVO.txt -Encoding UTF8
+          Compress-Archive -Path package/* -DestinationPath MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Force
+          Get-FileHash MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MafiaIII-UltraSpatialFilter-GPU-TEST-Dev-Win64
+          path: MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MafiaIII-Reflections-Win64
