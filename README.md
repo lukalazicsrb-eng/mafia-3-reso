@@ -4,11 +4,18 @@ Windows x64 razvojni paket za Modern Tweaks 2.5.1. U ZIP-u su `dinput8.dll` i up
 
 | Funkcija | Stanje |
 | --- | --- |
-| Nativna dijagnostika | Prati odabrane DXBC shadere i beleži tip, format, mipove, dimenzije i sample count vezanih resursa. |
+| Nativna dijagnostika | Prati odabrane DXBC shadere i beleži tip, format, mipove, dimenzije i sample count vezanih resursa. Novi razvojni build takođe beleži ograničen broj nepotvrđenih shader potpisa i brojače stvarnih D3D11 poziva. |
 | F8 → Visuals → Reflection Diagnostics | Prekidač za beleženje refleksija. Izbor se čuva u `MafiaReflections.ini`. |
 | Ultra Resolution Reflections | Postojeća F8 opcija ostaje dostupna. Uzrok mutnih refleksija i stvarna promena rezolucije zahtevaju A/B snimak. |
 | MSAA 2x, 4x i 8x | Implementirani su provera podrške, renderovanje i resolve na izolovanom D3D11 raster cilju. U igri nema uključenog MSAA za vozila. |
 | Stabilnost i filtriranje | Potrebna je potvrda SSR i cubemap prolaza iz stvarne igre. |
+
+**Važno za razvojnu ispravku dijagnostike:** prethodni `MafiaReflections.log`
+potvrđivao je samo zakačen D3D11 import — ne i stvarne render pozive.
+Ova grana uklanja uslov da PixelShader hook uspe pre uključivanja Draw praćenja
+i dodaje `HOOK_HEALTH` podatke. **To još nije popravka Ultra refleksija.**
+Ne diraj svoje High/Ultra podešavanje radi instalacije. Za nalazi vidi
+[`docs/ultra-investigation.md`](docs/ultra-investigation.md).
 
 ## Ručno postavljanje
 
