@@ -59,7 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: MafiaIII-UltraSpatialFilter-GPU-TEST-Dev-Win64
-          path: MafiaIII_UltraReflections_Diagnostic_Fix_DEV.zip
+          path: MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
