@@ -1,3 +1,5 @@
+#include "reflection_observer.h"
+
 #include <windows.h>
 #include <bcrypt.h>
 #include <unknwn.h>
@@ -9,7 +11,6 @@
 
 namespace {
 using InputFactory = HRESULT (WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
-using ObserverInstaller = BOOL (__cdecl*)(const wchar_t*);
 
 constexpr auto originalName = L"ModernTweaks_reflections_original.dll";
 constexpr auto expectedHash = "529b16daec59e2ce5c735e5c8e7974662b647591da2847c53a16f165a479e900";
@@ -81,11 +82,13 @@ void loadForGame(const std::filesystem::path& folder) {
     }
 
     const auto ini = folder / L"MafiaReflections.ini";
-    if (GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 0, ini.c_str()) == 1) {
-        const auto observer = loadLocal(folder / L"mafia_reflections_observer.dll");
-        const auto install = observer ? reinterpret_cast<ObserverInstaller>(
-            GetProcAddress(observer, "InstallMafiaReflectionsObserver")) : nullptr;
-        report(folder, install && install(folder.c_str())
+    if (GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 1, ini.c_str()) == 1) {
+        // Renderer callbacks can outlive calls to DirectInput8Create.
+        HMODULE pinned = nullptr;
+        const bool installed = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+            | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(proxyModule), &pinned)
+            && mafiareflections::installReflectionObserver(folder.c_str());
+        report(folder, installed
             ? "Reflection observer installed."
             : "Reflection observer could not attach to this renderer.");
     }

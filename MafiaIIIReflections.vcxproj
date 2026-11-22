@@ -20,7 +20,7 @@
     <NMakeBuildCommandLine>cmake -S "$(ProjectDir)." -B "$(NativeBuildDir)" -G "Visual Studio 17 2022" -A x64 &amp;&amp; cmake --build "$(NativeBuildDir)" --config $(Configuration)</NMakeBuildCommandLine>
     <NMakeReBuildCommandLine>cmake -S "$(ProjectDir)." -B "$(NativeBuildDir)" -G "Visual Studio 17 2022" -A x64 &amp;&amp; cmake --build "$(NativeBuildDir)" --config $(Configuration) --clean-first</NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>if exist "$(NativeBuildDir)\CMakeCache.txt" cmake --build "$(NativeBuildDir)" --config $(Configuration) --target clean</NMakeCleanCommandLine>
-    <NMakeOutput>$(NativeBuildDir)\$(Configuration)\mafia_reflections_observer.dll</NMakeOutput>
+    <NMakeOutput>$(NativeBuildDir)\$(Configuration)\dinput8.dll</NMakeOutput>
     <NMakePreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <NMakeIncludeSearchPath>$(ProjectDir)src;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
   </PropertyGroup>
@@ -31,6 +31,7 @@
     <ClCompile Include="src\msaa_reflection.cpp" />
     <ClCompile Include="tests\msaa_reflection_test.cpp" />
     <ClInclude Include="src\native_d3d11_hooks.h" />
+    <ClInclude Include="src\reflection_observer.h" />
     <ClInclude Include="src\msaa_reflection.h" />
     <None Include="CMakeLists.txt" />
   </ItemGroup>

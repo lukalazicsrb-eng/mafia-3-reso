@@ -23,6 +23,5 @@ jobs:
           name: MafiaIII-Reflections-Win64
           path: |
             build/Release/dinput8.dll
-            build/Release/mafia_reflections_observer.dll
             build/Release/msaa_reflection_test.exe
           if-no-files-found: error

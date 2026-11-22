@@ -1,4 +1,5 @@
 #include "native_d3d11_hooks.h"
+#include "reflection_observer.h"
 
 #include <wrl/client.h>
 
@@ -346,15 +347,15 @@ void observeResize(IDXGISwapChain*) noexcept {
 }
 }  // namespace
 
-extern "C" __declspec(dllexport) BOOL WINAPI InstallMafiaReflectionsObserver(const wchar_t* gameFolder) {
-    if (!gameFolder || !*gameFolder) return FALSE;
+bool mafiareflections::installReflectionObserver(const wchar_t* gameFolder) noexcept {
+    if (!gameFolder || !*gameFolder) return false;
     try {
         const std::filesystem::path folder(gameFolder);
-        if (!folder.is_absolute() || observerStarted.exchange(true, std::memory_order_acq_rel)) return FALSE;
+        if (!folder.is_absolute() || observerStarted.exchange(true, std::memory_order_acq_rel)) return false;
         logPath = folder / L"MafiaReflections.log";
         {
             std::ofstream log(logPath, std::ios::trunc);
-            if (!log) return FALSE;
+            if (!log) return false;
             log << "Mafia III reflections resource observation\n"
                 << "Candidate CRCs guide inspection; full DXBC SHA-256 and runtime bindings are logged.\n"
                 << "Renderer settings, resources, draws and dispatches are preserved.\n"
@@ -374,8 +375,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI InstallMafiaReflectionsObserver(con
             if (log) log << (installed ? "Verified executable D3D11 import connected.\n"
                                       : "No supported executable D3D11 import was connected.\n");
         }
-        return installed ? TRUE : FALSE;
+        return installed;
     } catch (...) {
-        return FALSE;
+        return false;
     }
 }
