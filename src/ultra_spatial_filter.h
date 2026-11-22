@@ -23,6 +23,7 @@ private:
     Microsoft::WRL::ComPtr<ID3DDeviceContextState> isolatedState_;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vertexShader_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> pixelShader_;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> rasterizer_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> scratch_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> scratchSrv_;
     D3D11_TEXTURE2D_DESC lastDesc_{};
