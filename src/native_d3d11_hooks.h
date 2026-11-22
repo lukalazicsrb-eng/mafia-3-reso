@@ -45,9 +45,20 @@ struct HookHealth {
     std::uint64_t gameDrawsObserved = 0;
     std::uint64_t gameDispatchesObserved = 0;
     std::uint64_t gamePresentsObserved = 0;
+    // Calls observed in the *already verified* Modern Tweaks 2.5.1 DX11 Draw
+    // forwarding slot. Independent of the game's D3D11 factory/vtable hooks.
+    std::uint64_t modernTweaksDrawCalls = 0;
+    bool modernTweaksSlotInstalled = false;
 };
 
 HookHealth hookHealth() noexcept;
+
+// Uses original Modern Tweaks 2.5.1's version-checked RIP-indirect Draw
+// callsite, rather than patching fragile graphics COM vtables. The original
+// user's DLL must be SHA-256 validated by the caller before this is invoked.
+// Patches one 8-byte pointer slot atomically; never alters bytes on disk.
+// Safe to retry while Modern Tweaks has not yet initialized the Draw slot.
+bool installVerifiedModernTweaksDrawBridge(HMODULE verifiedMod) noexcept;
 
 // Call during opt-in loader initialization, outside DllMain and before the
 // game's D3D11 device exists. Returns true when an exact factory import is
