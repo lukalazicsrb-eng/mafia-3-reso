@@ -1,0 +1,131 @@
+#include <windows.h>
+#include <bcrypt.h>
+#include <unknwn.h>
+
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <string_view>
+
+namespace {
+using InputFactory = HRESULT (WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
+using ObserverInstaller = BOOL (__cdecl*)(const wchar_t*);
+
+constexpr auto originalName = L"ModernTweaks_reflections_original.dll";
+constexpr auto expectedHash = "529b16daec59e2ce5c735e5c8e7974662b647591da2847c53a16f165a479e900";
+HMODULE proxyModule = nullptr;
+INIT_ONCE init = INIT_ONCE_STATIC_INIT;
+InputFactory originalFactory = nullptr;
+
+struct FileHandle {
+    HANDLE value;
+    ~FileHandle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+};
+
+bool isOriginal(HANDLE file) {
+    if (file == INVALID_HANDLE_VALUE) return false;
+    struct Algorithm {
+        BCRYPT_ALG_HANDLE value = nullptr;
+        ~Algorithm() { if (value) BCryptCloseAlgorithmProvider(value, 0); }
+    } algorithm;
+    struct Hash {
+        BCRYPT_HASH_HANDLE value = nullptr;
+        ~Hash() { if (value) BCryptDestroyHash(value); }
+    } hash;
+    if (BCryptOpenAlgorithmProvider(&algorithm.value, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0
+        || BCryptCreateHash(algorithm.value, &hash.value, nullptr, 0, nullptr, 0, 0) < 0) return false;
+
+    std::array<UCHAR, 64 * 1024> chunk{};
+    DWORD count = 0;
+    do {
+        if (!ReadFile(file, chunk.data(), static_cast<DWORD>(chunk.size()), &count, nullptr)) return false;
+        if (count && BCryptHashData(hash.value, chunk.data(), count, 0) < 0) return false;
+    } while (count);
+    std::array<UCHAR, 32> digest{};
+    if (BCryptFinishHash(hash.value, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) return false;
+
+    constexpr char hex[] = "0123456789abcdef";
+    for (std::size_t i = 0; i < digest.size(); ++i) {
+        if (hex[digest[i] >> 4] != expectedHash[2 * i] || hex[digest[i] & 15] != expectedHash[2 * i + 1])
+            return false;
+    }
+    return true;
+}
+
+HMODULE loadLocal(const std::filesystem::path& path) {
+    return LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+}
+
+InputFactory loadSystemInput() noexcept {
+    wchar_t systemDll[MAX_PATH]{};
+    const UINT length = GetSystemDirectoryW(systemDll, MAX_PATH);
+    constexpr wchar_t suffix[] = L"\\dinput8.dll";
+    if (!length || length + std::size(suffix) > std::size(systemDll)) return nullptr;
+    for (std::size_t i = 0; i < std::size(suffix); ++i) systemDll[length + i] = suffix[i];
+    const auto module = LoadLibraryExW(systemDll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return module ? reinterpret_cast<InputFactory>(GetProcAddress(module, "DirectInput8Create")) : nullptr;
+}
+
+void report(const std::filesystem::path& folder, std::string_view message) {
+    std::ofstream log(folder / L"MafiaReflections-loader.log", std::ios::app);
+    if (log) log << message << '\n';
+}
+
+void loadForGame(const std::filesystem::path& folder) {
+    const auto originalPath = folder / originalName;
+    const FileHandle lockedOriginal{CreateFileW(originalPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
+    if (!isOriginal(lockedOriginal.value)) {
+        report(folder, "Preserved Modern Tweaks DLL missing or SHA-256 mismatch.");
+        return;
+    }
+
+    const auto ini = folder / L"MafiaReflections.ini";
+    if (GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 0, ini.c_str()) == 1) {
+        const auto observer = loadLocal(folder / L"mafia_reflections_observer.dll");
+        const auto install = observer ? reinterpret_cast<ObserverInstaller>(
+            GetProcAddress(observer, "InstallMafiaReflectionsObserver")) : nullptr;
+        report(folder, install && install(folder.c_str())
+            ? "Reflection observer installed."
+            : "Reflection observer could not attach to this renderer.");
+    }
+
+    const auto original = loadLocal(originalPath);
+    if (original)
+        originalFactory = reinterpret_cast<InputFactory>(GetProcAddress(original, "DirectInput8Create"));
+    report(folder, originalFactory ? "Forwarding to verified Modern Tweaks 2.5.1."
+                                  : "Modern Tweaks input export unavailable.");
+}
+
+BOOL CALLBACK initialize(PINIT_ONCE, PVOID, PVOID*) noexcept {
+    try {
+        wchar_t path[32768]{};
+        const DWORD length = GetModuleFileNameW(proxyModule, path, static_cast<DWORD>(std::size(path)));
+        if (length && length < std::size(path)) loadForGame(std::filesystem::path(path).parent_path());
+    } catch (...) {
+        // Leave DirectInput available even if observer initialization throws.
+    }
+    if (!originalFactory) originalFactory = loadSystemInput();
+    return TRUE;
+}
+
+DWORD WINAPI startInitialization(LPVOID) {
+    InitOnceExecuteOnce(&init, initialize, nullptr, nullptr);
+    return 0;
+}
+} // namespace
+
+extern "C" __declspec(dllexport) HRESULT WINAPI DirectInput8Create(
+    HINSTANCE instance, DWORD version, REFIID iid, LPVOID* output, LPUNKNOWN outer) {
+    InitOnceExecuteOnce(&init, initialize, nullptr, nullptr);
+    return originalFactory ? originalFactory(instance, version, iid, output, outer) : E_FAIL;
+}
+
+BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        proxyModule = module;
+        if (const auto thread = CreateThread(nullptr, 0, startInitialization, nullptr, 0, nullptr))
+            CloseHandle(thread);
+    }
+    return TRUE;
+}

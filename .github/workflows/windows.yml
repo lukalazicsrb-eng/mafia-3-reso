@@ -1,0 +1,28 @@
+name: Windows x64 build and D3D11 tests
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build --build-config Release --output-on-failure --verbose
+      - run: python -B -m unittest discover -s tests -p 'test_*.py'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MafiaIII-Reflections-Win64
+          path: |
+            build/Release/dinput8.dll
+            build/Release/mafia_reflections_observer.dll
+            build/Release/msaa_reflection_test.exe
+          if-no-files-found: error

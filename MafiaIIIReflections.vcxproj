@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B39919F1-7B58-432C-8DA4-4BCF9132A08E}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NativeBuildDir>$(ProjectDir)build-vs</NativeBuildDir>
+    <NMakeBuildCommandLine>cmake -S "$(ProjectDir)." -B "$(NativeBuildDir)" -G "Visual Studio 17 2022" -A x64 &amp;&amp; cmake --build "$(NativeBuildDir)" --config $(Configuration)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cmake -S "$(ProjectDir)." -B "$(NativeBuildDir)" -G "Visual Studio 17 2022" -A x64 &amp;&amp; cmake --build "$(NativeBuildDir)" --config $(Configuration) --clean-first</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(NativeBuildDir)\CMakeCache.txt" cmake --build "$(NativeBuildDir)" --config $(Configuration) --target clean</NMakeCleanCommandLine>
+    <NMakeOutput>$(NativeBuildDir)\$(Configuration)\mafia_reflections_observer.dll</NMakeOutput>
+    <NMakePreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir)src;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="src\dinput8_proxy.cpp" />
+    <ClCompile Include="src\native_d3d11_hooks.cpp" />
+    <ClCompile Include="src\reflection_observer.cpp" />
+    <ClCompile Include="src\msaa_reflection.cpp" />
+    <ClCompile Include="tests\msaa_reflection_test.cpp" />
+    <ClInclude Include="src\native_d3d11_hooks.h" />
+    <ClInclude Include="src\msaa_reflection.h" />
+    <None Include="CMakeLists.txt" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
