@@ -28,10 +28,13 @@
     <ClCompile Include="src\dinput8_proxy.cpp" />
     <ClCompile Include="src\native_d3d11_hooks.cpp" />
     <ClCompile Include="src\reflection_observer.cpp" />
+    <ClCompile Include="src\reflection_menu.cpp" />
     <ClCompile Include="src\msaa_reflection.cpp" />
     <ClCompile Include="tests\msaa_reflection_test.cpp" />
+    <ClCompile Include="tests\reflection_settings_test.cpp" />
     <ClInclude Include="src\native_d3d11_hooks.h" />
     <ClInclude Include="src\reflection_observer.h" />
+    <ClInclude Include="src\reflection_menu.h" />
     <ClInclude Include="src\msaa_reflection.h" />
     <None Include="CMakeLists.txt" />
   </ItemGroup>

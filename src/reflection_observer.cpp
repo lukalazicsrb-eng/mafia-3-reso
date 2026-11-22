@@ -42,11 +42,15 @@ std::array<Pass, 4> candidates{{
 
 std::mutex state;
 std::filesystem::path logPath;
+std::filesystem::path settingsPath;
 std::atomic<bool> observerStarted{false};
+std::atomic<bool> observerAvailable{false};
+std::atomic<bool> diagnosticsEnabled{true};
 std::atomic<std::uint64_t> presentedFrames{0};
 std::atomic<unsigned> drawChecks{0};
 std::atomic<unsigned> dependencyChecks{0};
 std::uint64_t nextResourceId = 0;
+std::uint64_t previousCaptureLastResourceId = 0;
 unsigned relatedEvents = 0;
 unsigned resizeEvents = 0;
 bool dependencyScanStarted = false;
@@ -81,7 +85,8 @@ bool possibleGraphicsDependency(std::uint32_t crc) noexcept {
 std::uint64_t resourceId(ID3D11Resource* resource, bool assign) noexcept {
     std::uint64_t id = 0;
     UINT size = sizeof(id);
-    if (SUCCEEDED(resource->GetPrivateData(resourceIdKey, &size, &id)) && size == sizeof(id))
+    if (SUCCEEDED(resource->GetPrivateData(resourceIdKey, &size, &id)) && size == sizeof(id)
+        && id > previousCaptureLastResourceId)
         return id;
     if (!assign) return 0;
     id = ++nextResourceId;
@@ -253,7 +258,8 @@ void startDependencyChecks() noexcept {
 }
 
 void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
-    if (drawChecks.load(std::memory_order_relaxed) >= drawCheckLimit
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed)
+        || drawChecks.load(std::memory_order_relaxed) >= drawCheckLimit
         || drawChecks.fetch_add(1, std::memory_order_relaxed) >= drawCheckLimit) return;
     try {
         ComPtr<ID3D11PixelShader> shader;
@@ -264,6 +270,7 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
         if (!pass && (!possibleGraphicsDependency(identity.crc32) || !takeDependencyCheck())) return;
 
         std::lock_guard<std::mutex> guard(state);
+        if (!diagnosticsEnabled.load(std::memory_order_relaxed)) return;
         if (pass ? pass->logged >= perPassLimit : relatedEvents >= relatedEventLimit) return;
         Views<ID3D11ShaderResourceView, srvLimit> inputs;
         Views<ID3D11RenderTargetView, rtvLimit> outputs;
@@ -302,14 +309,14 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
 }
 
 void observeDispatch(ID3D11DeviceContext* context, const DispatchCall& call) noexcept {
-    if (!takeDependencyCheck()) return;
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed) || !takeDependencyCheck()) return;
     try {
         ComPtr<ID3D11ComputeShader> shader;
         context->CSGetShader(&shader, nullptr, nullptr);
         ShaderIdentity identity{};
         if (!getShaderIdentity(shader.Get(), identity)) return;
         std::lock_guard<std::mutex> guard(state);
-        if (relatedEvents >= relatedEventLimit) return;
+        if (!diagnosticsEnabled.load(std::memory_order_relaxed) || relatedEvents >= relatedEventLimit) return;
 
         Views<ID3D11ShaderResourceView, srvLimit> inputs;
         Views<ID3D11UnorderedAccessView, uavLimit> outputs;
@@ -334,9 +341,10 @@ void observePresent(IDXGISwapChain*, UINT, UINT flags, HRESULT result) noexcept 
 }
 
 void observeResize(IDXGISwapChain*) noexcept {
+    if (!diagnosticsEnabled.load(std::memory_order_relaxed)) return;
     try {
         std::lock_guard<std::mutex> guard(state);
-        if (resizeEvents >= 8) return;
+        if (!diagnosticsEnabled.load(std::memory_order_relaxed) || resizeEvents >= 8) return;
         ++resizeEvents;
         std::ofstream log(logPath, std::ios::app);
         if (log) log << "\nResizeBuffers attempted after PresentEpoch="
@@ -353,6 +361,9 @@ bool mafiareflections::installReflectionObserver(const wchar_t* gameFolder) noex
         const std::filesystem::path folder(gameFolder);
         if (!folder.is_absolute() || observerStarted.exchange(true, std::memory_order_acq_rel)) return false;
         logPath = folder / L"MafiaReflections.log";
+        settingsPath = folder / L"MafiaReflections.ini";
+        diagnosticsEnabled.store(GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 1,
+            settingsPath.c_str()) == 1, std::memory_order_relaxed);
         {
             std::ofstream log(logPath, std::ios::trunc);
             if (!log) return false;
@@ -369,6 +380,7 @@ bool mafiareflections::installReflectionObserver(const wchar_t* gameFolder) noex
         hooks.afterPresent = &observePresent;
         hooks.beforeResize = &observeResize;
         const bool installed = mafiareflections::native::installVerifiedHooks(hooks);
+        observerAvailable.store(installed, std::memory_order_release);
         {
             std::lock_guard<std::mutex> guard(state);
             std::ofstream log(logPath, std::ios::app);
@@ -376,6 +388,44 @@ bool mafiareflections::installReflectionObserver(const wchar_t* gameFolder) noex
                                       : "No supported executable D3D11 import was connected.\n");
         }
         return installed;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool mafiareflections::reflectionDiagnosticsAvailable() noexcept {
+    return observerAvailable.load(std::memory_order_acquire);
+}
+
+bool mafiareflections::reflectionDiagnosticsEnabled() noexcept {
+    return diagnosticsEnabled.load(std::memory_order_relaxed);
+}
+
+bool mafiareflections::setReflectionDiagnosticsEnabled(bool enabled) noexcept {
+    if (!reflectionDiagnosticsAvailable()) return false;
+    try {
+        std::lock_guard<std::mutex> guard(state);
+        if (reflectionDiagnosticsEnabled() == enabled) return true;
+        if (!WritePrivateProfileStringW(L"Diagnostics", L"Enabled", enabled ? L"1" : L"0",
+            settingsPath.c_str())) {
+            std::ofstream log(logPath, std::ios::app);
+            if (log) log << "\nCould not save the F8 choice to MafiaReflections.ini.\n";
+            return false;
+        }
+        if (enabled) {
+            for (auto& pass : candidates) pass.logged = 0;
+            previousCaptureLastResourceId = nextResourceId;
+            relatedEvents = 0;
+            resizeEvents = 0;
+            dependencyScanStarted = false;
+            dependencyChecks.store(0, std::memory_order_relaxed);
+            drawChecks.store(0, std::memory_order_relaxed);
+        }
+        diagnosticsEnabled.store(enabled, std::memory_order_relaxed);
+        std::ofstream log(logPath, std::ios::app);
+        if (log) log << (enabled ? "\nReflection diagnostics enabled from F8.\n"
+                                : "\nReflection diagnostics disabled from F8.\n");
+        return true;
     } catch (...) {
         return false;
     }

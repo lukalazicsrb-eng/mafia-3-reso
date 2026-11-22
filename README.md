@@ -5,9 +5,10 @@ Windows x64 razvojni paket za Modern Tweaks 2.5.1. U ZIP-u su `dinput8.dll` i up
 | Funkcija | Stanje |
 | --- | --- |
 | Nativna dijagnostika | Prati odabrane DXBC shadere i beleži tip, format, mipove, dimenzije i sample count vezanih resursa. |
+| F8 → Visuals → Reflection Diagnostics | Prekidač za beleženje refleksija. Izbor se čuva u `MafiaReflections.ini`. |
 | Ultra Resolution Reflections | Postojeća F8 opcija ostaje dostupna. Uzrok mutnih refleksija i stvarna promena rezolucije zahtevaju A/B snimak. |
 | MSAA 2x, 4x i 8x | Implementirani su provera podrške, renderovanje i resolve na izolovanom D3D11 raster cilju. U igri nema uključenog MSAA za vozila. |
-| Stabilnost i filtriranje, nove F8 opcije | Potrebna je potvrda SSR i cubemap prolaza iz stvarne igre. |
+| Stabilnost i filtriranje | Potrebna je potvrda SSR i cubemap prolaza iz stvarne igre. |
 
 ## Ručno postavljanje
 
@@ -17,7 +18,7 @@ Windows x64 razvojni paket za Modern Tweaks 2.5.1. U ZIP-u su `dinput8.dll` i up
 
 Ako već imaš sačuvan `ModernTweaks_reflections_original.dll`, zadrži ga. Ako je aktivan stariji FSR proxy, skloni ga u rezervni folder i koristi svoju kopiju originalnog Modern Tweaks DLL-a.
 
-Dijagnostika beleži događaje u `MafiaReflections-loader.log` i `MafiaReflections.log`. Za originalni mod očekuje SHA-256 `529b16daec59e2ce5c735e5c8e7974662b647591da2847c53a16f165a479e900`. Praćenje D3D11 zahteva podržanu verziju EXE-a i dovoljno ranu inicijalizaciju.
+Dijagnostika beleži događaje u `MafiaReflections-loader.log` i `MafiaReflections.log`. Stavka **Reflection Diagnostics** nalazi se u postojećem F8 → Visuals meniju, pored podešavanja anti-aliasinga. Za originalni mod očekuje SHA-256 `529b16daec59e2ce5c735e5c8e7974662b647591da2847c53a16f165a479e900`. Praćenje D3D11 zahteva podržanu verziju EXE-a i dovoljno ranu inicijalizaciju. Ako D3D11 povezivanje nije uspelo, stavka prikazuje **Unavailable**.
 
 ## Provera rezolucije refleksija
 

@@ -1,3 +1,4 @@
+#include "reflection_menu.h"
 #include "reflection_observer.h"
 
 #include <windows.h>
@@ -81,23 +82,24 @@ void loadForGame(const std::filesystem::path& folder) {
         return;
     }
 
-    const auto ini = folder / L"MafiaReflections.ini";
-    if (GetPrivateProfileIntW(L"Diagnostics", L"Enabled", 1, ini.c_str()) == 1) {
-        // Renderer callbacks can outlive calls to DirectInput8Create.
-        HMODULE pinned = nullptr;
-        const bool installed = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
-            | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(proxyModule), &pinned)
-            && mafiareflections::installReflectionObserver(folder.c_str());
-        report(folder, installed
-            ? "Reflection observer installed."
-            : "Reflection observer could not attach to this renderer.");
-    }
+    // Renderer and F8 callbacks can outlive calls to DirectInput8Create.
+    HMODULE pinned = nullptr;
+    const bool pinVerified = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+        | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(proxyModule), &pinned) != FALSE;
+    const bool observerInstalled = pinVerified && mafiareflections::installReflectionObserver(folder.c_str());
+    report(folder, observerInstalled ? "Reflection observer installed."
+        : "Reflection observer could not attach to this renderer.");
 
     const auto original = loadLocal(originalPath);
     if (original)
         originalFactory = reinterpret_cast<InputFactory>(GetProcAddress(original, "DirectInput8Create"));
     report(folder, originalFactory ? "Forwarding to verified Modern Tweaks 2.5.1."
                                   : "Modern Tweaks input export unavailable.");
+    if (originalFactory && pinVerified) {
+        report(folder, mafiareflections::installReflectionMenu(original)
+            ? "Reflection Diagnostics added to Modern Tweaks F8 / Visuals."
+            : "Reflection Diagnostics F8 hook refused; the Modern Tweaks menu remains available.");
+    }
 }
 
 BOOL CALLBACK initialize(PINIT_ONCE, PVOID, PVOID*) noexcept {

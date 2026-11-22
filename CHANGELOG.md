@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2-dev.1
+
+- Prekidač **Reflection Diagnostics** dodat je u postojeći Modern Tweaks F8 → Visuals. On/Off se čuva odvojeno u `MafiaReflections.ini`.
+- DLL proverava originalni Modern Tweaks i instrukciju na poznatom Visuals pozivu pre uključivanja nove kontrole. Originalni anti-aliasing ostaje dostupan.
+
 ## 0.1.1-dev.1
 
 - D3D11 dijagnostika ugrađena je u `dinput8.dll`. Za ručno postavljanje dovoljan je taj DLL uz sačuvani original Modern Tweaks-a.

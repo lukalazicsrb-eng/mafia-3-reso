@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(MafiaIIIReflections VERSION 0.1.1 LANGUAGES CXX)
+project(MafiaIIIReflections VERSION 0.1.2 LANGUAGES CXX)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Build MafiaIIIReflections with a Windows x64 toolchain.")
@@ -14,7 +14,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
 
 add_library(mafia_reflections_proxy SHARED
-    src/dinput8_proxy.cpp src/native_d3d11_hooks.cpp src/reflection_observer.cpp)
+    src/dinput8_proxy.cpp src/native_d3d11_hooks.cpp src/reflection_observer.cpp
+    src/reflection_menu.cpp)
 set_target_properties(mafia_reflections_proxy PROPERTIES OUTPUT_NAME dinput8 PREFIX "")
 target_link_libraries(mafia_reflections_proxy PRIVATE bcrypt d3d11 dxgi)
 
@@ -27,4 +28,8 @@ if(BUILD_TESTING)
     add_executable(msaa_reflection_test tests/msaa_reflection_test.cpp)
     target_link_libraries(msaa_reflection_test PRIVATE reflection_msaa d3dcompiler)
     add_test(NAME reflection_msaa_warp COMMAND msaa_reflection_test)
+
+    add_executable(reflection_settings_test tests/reflection_settings_test.cpp src/reflection_observer.cpp)
+    target_include_directories(reflection_settings_test PRIVATE src)
+    add_test(NAME reflection_settings COMMAND reflection_settings_test)
 endif()
