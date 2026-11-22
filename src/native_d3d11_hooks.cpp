@@ -137,6 +137,18 @@ Hook<Present> present;
 Hook<ResizeBuffers> resizeBuffers;
 Hook<CreateSwapChain> createSwapChain;
 
+// The original 2.5.1 Modern Tweaks wrapper invokes the original D3D11 Draw
+// through an 8-byte RIP-relative call target. Unlike its COM vtable, this
+// exact slot has a stable, SHA-validated version-specific identity.
+constexpr std::uintptr_t modernDrawCallRva = 0x79A71;
+constexpr std::uintptr_t modernDrawSlotRva = 0x3A41B48;
+constexpr std::array<unsigned char,6> modernDrawCallBytes{{0xff,0x15,0xd1,0x80,0x9c,0x03}};
+std::atomic<ContextDraw> modernOriginalDraw{nullptr};
+std::atomic<bool> modernSlotInstalled{false};
+std::atomic<std::uint64_t> modernDrawCalls{0};
+std::mutex modernInstallMutex;
+thread_local bool modernDrawRecursion=false;
+
 template <typename Object>
 bool tagGameObject(Object* object) noexcept {
     return SUCCEEDED(object->SetPrivateData(gameObjectKey, sizeof(gameObjectMarker), &gameObjectMarker));
@@ -220,6 +232,34 @@ void afterDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
         ObserverScope active;
         observers.afterDraw(context, call);
     }
+}
+
+// The v9 experimental F8 project proved this *original Modern Tweaks*
+// callsite receives real Mafia III fullscreen DirectX11 draws. The previous
+// reflections observer only patched the EXE factory and lost the render
+// context when a third-party mod owned the D3D11 COM vtable.
+void STDMETHODCALLTYPE onModernTweaksDraw(ID3D11DeviceContext* context, UINT count, UINT first) {
+    const auto original=modernOriginalDraw.load(std::memory_order_acquire);
+    if(!original)return;
+    if(modernDrawRecursion || !initialized.load(std::memory_order_acquire) || !context) {
+        original(context,count,first);
+        return;
+    }
+
+    modernDrawRecursion=true;
+    {
+        // Suppress duplicate notifications if the original Draw ultimately
+        // reaches an already-intercepted DX11 vtable method. The graphics
+        // operation always remains the game's original implementation.
+        ObserverScope withinOriginal;
+        modernDrawCalls.fetch_add(1,std::memory_order_relaxed);
+        gameDraws.fetch_add(1,std::memory_order_relaxed);
+        const DrawCall call{DrawKind::Draw,count,first,0};
+        if(observers.beforeDraw)observers.beforeDraw(context,call);
+        original(context,count,first);
+        if(observers.afterDraw)observers.afterDraw(context,call);
+    }
+    modernDrawRecursion=false;
 }
 
 void STDMETHODCALLTYPE onDraw(ID3D11DeviceContext* context, UINT count, UINT first) {
@@ -447,6 +487,71 @@ bool installVerifiedHooks(const Observers& callbacks) noexcept {
     return false;
 }
 
+bool installVerifiedModernTweaksDrawBridge(HMODULE verifiedMod) noexcept {
+    if(!verifiedMod || !initialized.load(std::memory_order_acquire))return false;
+    if(modernSlotInstalled.load(std::memory_order_acquire))return true;
+    std::lock_guard<std::mutex> gate(modernInstallMutex);
+    if(modernSlotInstalled.load(std::memory_order_relaxed))return true;
+
+    // The caller already verified the full SHA256 of its preserved original
+    // Modern Tweaks DLL before LoadLibrary. Revalidate the module identity
+    // and bytes here so no arbitrary target is ever patched.
+    wchar_t modulePath[32768]{};
+    const DWORD len=GetModuleFileNameW(verifiedMod,modulePath,
+                                     static_cast<DWORD>(std::size(modulePath)));
+    if(!len || len>=std::size(modulePath))return false;
+    const auto filename=std::filesystem::path(modulePath).filename().wstring();
+    if(_wcsicmp(filename.c_str(),L"ModernTweaks_reflections_original.dll")!=0)return false;
+
+    auto* base=reinterpret_cast<std::uint8_t*>(verifiedMod);
+    const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<static_cast<LONG>(sizeof(*dos)))return false;
+    const auto* nt=reinterpret_cast<const IMAGE_NT_HEADERS64*>(base+dos->e_lfanew);
+    if(nt->Signature!=IMAGE_NT_SIGNATURE ||
+       nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+       nt->OptionalHeader.SizeOfImage<modernDrawSlotRva+sizeof(void*))return false;
+
+    auto* call=base+modernDrawCallRva;
+    if(std::memcmp(call,modernDrawCallBytes.data(),modernDrawCallBytes.size())!=0)return false;
+    std::int32_t disp=0;
+    std::memcpy(&disp,call+2,sizeof(disp));
+    const auto target=reinterpret_cast<std::intptr_t>(call+6)+disp;
+    if(target!=reinterpret_cast<std::intptr_t>(base+modernDrawSlotRva))return false;
+
+    auto* slot=reinterpret_cast<void**>(base+modernDrawSlotRva);
+    MEMORY_BASIC_INFORMATION memory{};
+    if(VirtualQuery(slot,&memory,sizeof(memory))!=sizeof(memory) ||
+       memory.State!=MEM_COMMIT)return false;
+    auto* prior=*slot;
+    if(!prior || prior==reinterpret_cast<void*>(&onModernTweaksDraw))return false;
+    MEMORY_BASIC_INFORMATION executable{};
+    if(VirtualQuery(prior,&executable,sizeof(executable))!=sizeof(executable) ||
+       executable.State!=MEM_COMMIT)return false;
+    const DWORD executeProtection=executable.Protect&0xff;
+    if(executeProtection!=PAGE_EXECUTE && executeProtection!=PAGE_EXECUTE_READ &&
+       executeProtection!=PAGE_EXECUTE_READWRITE &&
+       executeProtection!=PAGE_EXECUTE_WRITECOPY)return false;
+
+    const auto original=reinterpret_cast<ContextDraw>(prior);
+    modernOriginalDraw.store(original,std::memory_order_release);
+    DWORD oldProtection=0;
+    if(!VirtualProtect(slot,sizeof(void*),PAGE_READWRITE,&oldProtection)) {
+        modernOriginalDraw.store(nullptr,std::memory_order_release);
+        return false;
+    }
+    auto* existing=InterlockedCompareExchangePointer(
+        reinterpret_cast<PVOID volatile*>(slot),
+        reinterpret_cast<PVOID>(&onModernTweaksDraw),prior);
+    DWORD ignored=0;
+    VirtualProtect(slot,sizeof(void*),oldProtection,&ignored);
+    if(existing!=prior) {
+        modernOriginalDraw.store(nullptr,std::memory_order_release);
+        return false;
+    }
+    modernSlotInstalled.store(true,std::memory_order_release);
+    return true;
+}
+
 HookHealth hookHealth() noexcept {
     return {
         factoryCalls.load(std::memory_order_relaxed),
@@ -454,7 +559,9 @@ HookHealth hookHealth() noexcept {
         taggedShaders.load(std::memory_order_relaxed),
         gameDraws.load(std::memory_order_relaxed),
         gameDispatches.load(std::memory_order_relaxed),
-        gamePresents.load(std::memory_order_relaxed)
+        gamePresents.load(std::memory_order_relaxed),
+        modernDrawCalls.load(std::memory_order_relaxed),
+        modernSlotInstalled.load(std::memory_order_acquire)
     };
 }
 
