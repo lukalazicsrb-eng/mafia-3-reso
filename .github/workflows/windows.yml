@@ -18,6 +18,45 @@ jobs:
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build --build-config Release --output-on-failure --verbose
       - run: python -B -m unittest discover -s tests -p 'test_*.py'
+      - name: Verify diagnostic installer PowerShell scripts parse
+        shell: pwsh
+        run: |
+          foreach ($name in @('Install-UltraCaptureAudit.ps1','Restore-UltraCaptureAudit.ps1')) {
+            $file = (Resolve-Path (Join-Path install $name)).Path
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors)
+            if ($errors.Count -gt 0) { throw "PowerShell syntax error: $name - $($errors -join '; ')" }
+          }
+      - name: Package safe standalone reflection capture patch
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item build/Release/dinput8.dll package/dinput8.dll
+          Copy-Item install/Install-UltraCaptureAudit.ps1 package/
+          Copy-Item install/Restore-UltraCaptureAudit.ps1 package/
+          Copy-Item 'install/Instaliraj refleksije - DIJAGNOSTIKA.cmd' package/
+          Copy-Item 'install/Vrati prethodni DLL - DIJAGNOSTIKA.cmd' package/
+          Copy-Item docs/ultra-investigation.md package/ULTRA_STATUS.md
+          Copy-Item README.md package/PROJECT_README.md
+          @'
+          OVO NIJE POPRAVKA ULTRA REFLEKSIJA.
+          Kompajlirani DLL otklanja problem u pracenju DX11 render-prolaza
+          i otkriva da li se stvarni shaderi i Draw pozivi snimaju.
+          Ne menja ModernTweaks.dat i ne ukljucuje MSAA u Mafia III.
+          Raspakuj ZIP van igre i pokreni:
+          Instaliraj refleksije - DIJAGNOSTIKA.cmd
+          Ako igra ne radi, zatvori je i pokreni:
+          Vrati prethodni DLL - DIJAGNOSTIKA.cmd
+          Originalni Modern Tweaks DLL nije u ovom paketu.
+          '@ | Set-Content -LiteralPath package/PROCITAJ_PRVO.txt -Encoding UTF8
+          Compress-Archive -Path package/* -DestinationPath MafiaIII_UltraReflections_Diagnostic_Fix_DEV.zip -Force
+          Get-FileHash MafiaIII_UltraReflections_Diagnostic_Fix_DEV.zip -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MafiaIII-UltraReflections-Diagnostic-DEV-Win64
+          path: MafiaIII_UltraReflections_Diagnostic_Fix_DEV.zip
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MafiaIII-Reflections-Win64
