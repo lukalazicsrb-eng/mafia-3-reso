@@ -65,6 +65,7 @@ unsigned relatedEvents = 0;
 unsigned resizeEvents = 0;
 std::set<std::array<std::uint8_t, 32>> unmatchedShaders;
 std::atomic<std::uint64_t> untaggedShaderDraws{0};
+std::atomic<unsigned> untaggedSamplesLogged{0};
 std::atomic<unsigned> reflectionPassMatches{0};
 bool dependencyScanStarted = false;
 
@@ -280,6 +281,38 @@ void observeDraw(ID3D11DeviceContext* context, const DrawCall& call) noexcept {
         ShaderIdentity identity{};
         if (!getShaderIdentity(shader.Get(), identity)) {
             untaggedShaderDraws.fetch_add(1, std::memory_order_relaxed);
+            // The original shader may have been created before our factory
+            // IAT observer was installed. Capture a bounded *unverified*
+            // render-pass sample rather than falsely claiming no shaders
+            // executed. Never allow this to unlock the Ultra GPU filter.
+            if (shader && (checked == 0 || (checked % 2048 == 0 && checked <= 49152))
+                && untaggedSamplesLogged.load(std::memory_order_relaxed) < 24) {
+                std::lock_guard<std::mutex> guard(state);
+                if (untaggedSamplesLogged.load(std::memory_order_relaxed) < 24) {
+                    ++untaggedSamplesLogged;
+                    Views<ID3D11ShaderResourceView, srvLimit> inputs;
+                    Views<ID3D11RenderTargetView, rtvLimit> outputs;
+                    ComPtr<ID3D11DepthStencilView> depth;
+                    context->PSGetShaderResources(0, srvLimit, inputs.values.data());
+                    context->OMGetRenderTargets(rtvLimit, outputs.values.data(), &depth);
+                    std::ofstream log(logPath, std::ios::app);
+                    if (log) {
+                        const int selected=GetPrivateProfileIntW(
+                            L"Visuals", L"Reflections", -1, modernSettingsPath.c_str());
+                        log << "UNVERIFIED_RENDER_SAMPLE drawOrdinal=" << checked
+                            << " reflectionSetting=" << selected
+                            << " shaderObject=0x" << std::hex
+                            << reinterpret_cast<std::uintptr_t>(shader.Get())
+                            << std::dec
+                            << " (no DXBC bytecode identity: output NOT eligible for filtering)"
+                            << " drawKind=" << (call.kind==DrawKind::Draw ? "Draw" : "DrawIndexed")
+                            << " vertices=" << call.count << '\n';
+                        writeViews<D3D11_SHADER_RESOURCE_VIEW_DESC>(log, "t", inputs, false);
+                        writeViews<D3D11_RENDER_TARGET_VIEW_DESC>(log, "rtv", outputs, false);
+                        writeView<D3D11_DEPTH_STENCIL_VIEW_DESC>(log, "dsv", 0, depth.Get(), false);
+                    }
+                }
+            }
             return;
         }
         auto* pass = candidate(identity.crc32);
@@ -446,6 +479,8 @@ void observePresent(IDXGISwapChain*, UINT, UINT flags, HRESULT result) noexcept 
                 << " gameDevices=" << health.gameDevicesTagged
                 << " taggedShaders=" << health.shadersTagged
                 << " callbacksDraw=" << health.gameDrawsObserved
+                << " modernTweaksDrawCalls=" << health.modernTweaksDrawCalls
+                << " modernTweaksSlotInstalled=" << (health.modernTweaksSlotInstalled?1:0)
                 << " callbacksDispatch=" << health.gameDispatchesObserved
                 << " callbacksPresent=" << health.gamePresentsObserved
                 << " shaderIdentityMisses=" << untaggedShaderDraws.load()
@@ -550,6 +585,7 @@ bool mafiareflections::setReflectionDiagnosticsEnabled(bool enabled) noexcept {
             for (auto& pass : candidates) pass.logged = 0;
             unmatchedShaders.clear();
             untaggedShaderDraws.store(0, std::memory_order_relaxed);
+            untaggedSamplesLogged.store(0, std::memory_order_relaxed);
             reflectionPassMatches.store(0, std::memory_order_relaxed);
             previousCaptureLastResourceId = nextResourceId;
             relatedEvents = 0;
