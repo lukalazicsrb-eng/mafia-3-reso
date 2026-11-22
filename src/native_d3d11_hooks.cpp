@@ -287,11 +287,13 @@ void attachDevice(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     else device->GetImmediateContext(&context);
     if (context && context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) {
         std::lock_guard<std::mutex> guard(installation);
-        if (pixelShader.attach(device, createPixelShaderIndex, &onCreatePixelShader, systemD3d11)
-            && draw.attach(context, drawIndex, &onDraw, systemD3d11)
-            && drawIndexed.attach(context, drawIndexedIndex, &onDrawIndexed, systemD3d11)
-            && tagGameObject(device)) {
-            tagGameObject(context);
+        // A third-party mod can hook CreatePixelShader before we attach.
+        // That must not silently disable ALL draw diagnostics. Establish
+        // draw callbacks independently and report missing shader identities.
+        pixelShader.attach(device, createPixelShaderIndex, &onCreatePixelShader, systemD3d11);
+        const bool drawAttached = draw.attach(context, drawIndex, &onDraw, systemD3d11);
+        const bool indexedAttached = drawIndexed.attach(context, drawIndexedIndex, &onDrawIndexed, systemD3d11);
+        if (drawAttached && indexedAttached && tagGameObject(device) && tagGameObject(context)) {
             taggedDevices.fetch_add(1, std::memory_order_relaxed);
             computeShader.attach(device, createComputeShaderIndex, &onCreateComputeShader, systemD3d11);
             dispatch.attach(context, dispatchIndex, &onDispatch, systemD3d11);
