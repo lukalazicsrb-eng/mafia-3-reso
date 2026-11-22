@@ -146,6 +146,7 @@ constexpr std::array<unsigned char,6> modernDrawCallBytes{{0xff,0x15,0xd1,0x80,0
 std::atomic<ContextDraw> modernOriginalDraw{nullptr};
 std::atomic<bool> modernSlotInstalled{false};
 std::atomic<std::uint64_t> modernDrawCalls{0};
+std::atomic<bool> modernContextTagged{false};
 std::mutex modernInstallMutex;
 thread_local bool modernDrawRecursion=false;
 
@@ -247,6 +248,17 @@ void STDMETHODCALLTYPE onModernTweaksDraw(ID3D11DeviceContext* context, UINT cou
     }
 
     modernDrawRecursion=true;
+    if(!modernContextTagged.load(std::memory_order_acquire)) {
+        ID3D11Device* realDevice=nullptr;
+        context->GetDevice(&realDevice);
+        if(realDevice) {
+            if(tagGameObject(realDevice) && tagGameObject(context)) {
+                modernContextTagged.store(true,std::memory_order_release);
+                taggedDevices.fetch_add(1,std::memory_order_relaxed);
+            }
+            realDevice->Release();
+        }
+    }
     {
         // Suppress duplicate notifications if the original Draw ultimately
         // reaches an already-intercepted DX11 vtable method. The graphics
