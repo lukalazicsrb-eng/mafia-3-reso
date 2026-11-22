@@ -55,7 +55,7 @@ jobs:
           Originalni Modern Tweaks DLL nije u ovom paketu.
           '@ | Set-Content -LiteralPath package/PROCITAJ_PRVO.txt -Encoding UTF8
           Compress-Archive -Path package/* -DestinationPath MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Force
-          Get-FileHash MafiaIII_UltraReflections_Diagnostic_Fix_DEV.zip -Algorithm SHA256
+          Get-FileHash MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Algorithm SHA256
       - uses: actions/upload-artifact@v4
         with:
           name: MafiaIII-UltraSpatialFilter-GPU-TEST-Dev-Win64
