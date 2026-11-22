@@ -29,6 +29,8 @@ struct DispatchCall {
 
 struct Observers {
     void (*beforeDraw)(ID3D11DeviceContext*, const DrawCall&) noexcept = nullptr;
+    // Optional post-pass callback. Recursion guard remains active while it runs.
+    void (*afterDraw)(ID3D11DeviceContext*, const DrawCall&) noexcept = nullptr;
     void (*beforeDispatch)(ID3D11DeviceContext*, const DispatchCall&) noexcept = nullptr;
     void (*afterPresent)(IDXGISwapChain*, UINT syncInterval, UINT flags, HRESULT) noexcept = nullptr;
     void (*beforeResize)(IDXGISwapChain*) noexcept = nullptr;
