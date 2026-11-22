@@ -56,6 +56,24 @@ jobs:
           '@ | Set-Content -LiteralPath package/PROCITAJ_PRVO.txt -Encoding UTF8
           Compress-Archive -Path package/* -DestinationPath MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Force
           Get-FileHash MafiaIII_UltraSpatialFilter_GPU_TEST_Dev_Windows_x64.zip -Algorithm SHA256
+      - name: Package original Modern Tweaks style DLL-only test ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force manual-zip | Out-Null
+          Copy-Item build/Release/dinput8.dll manual-zip/dinput8.dll
+          Copy-Item manual/INSTALLATION.txt manual-zip/INSTALLATION.txt
+          Copy-Item docs/ultra-filter-prototype.md manual-zip/ULTRA_STATUS.md
+          $items=@(Get-ChildItem manual-zip -File | Select-Object -ExpandProperty Name)
+          if (@(Compare-Object $items @('dinput8.dll','INSTALLATION.txt','ULTRA_STATUS.md')).Count) {
+            throw 'Unexpected or missing manual ZIP files.'
+          }
+          Compress-Archive -Path manual-zip/* -DestinationPath MafiaIII_Ultra_DrawBridge_Manual_DLL_Test_x64.zip -Force
+          Get-FileHash MafiaIII_Ultra_DrawBridge_Manual_DLL_Test_x64.zip -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MafiaIII-Ultra-DrawBridge-Manual-DLL-x64
+          path: MafiaIII_Ultra_DrawBridge_Manual_DLL_Test_x64.zip
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MafiaIII-UltraSpatialFilter-GPU-TEST-Dev-Win64
